@@ -1,0 +1,170 @@
+
+
+#downloading libraries just in case
+library(devtools)
+library(ggplot2)
+library(ggthemes)
+library(plyr)
+library(car)
+library(fUnitRoots)
+library(lmtest)
+library(dplyr)
+library(reshape2)
+library(Rcpp)
+library(gmodels)
+library(VGAM)
+
+#importing gss 2006
+data <- read.csv("C:/1columbia/dataanalysis/GSS.2006.csv.xls")
+
+#Research question: perspective on an average person's influence on politics 
+#based on political ideology(liberal to conservative), race, and wealth of 
+#family at 16 years old
+
+select.me = c('poleff3', 'polviews', 'poleff13','poleff11', 'race', 'age')
+prep_data = data[,select.me]
+head(prep_data)
+
+###DATA PREP###
+#recoding
+#1 = strongly disagree.. to.. 5 = strong agree
+prep_data$poleff3 = 6-prep_data$poleff3
+prep_data$poleff13 = 6-prep_data$poleff13
+prep_data$poleff11 = 6-prep_data$poleff11
+
+
+my_data <- na.omit(prep_data)
+#correlation matrix shows that there is relatively low correlation between variables.
+cor(my_data)
+
+#assigning new labels to race variable
+my_data$race = factor(my_data$race, 
+                     levels = c(1, 2, 3),
+                     labels = c("white", "black", "other"))
+
+#using library fastDummies to create race dummy variables
+my_data <- fastDummies::dummy_cols(my_data, select_columns = "race")
+
+#maybe we will use age as quadratic?
+my_data$agesq = my_data$age^2
+
+###DATA EXPLORATION###
+summary(prep_data) #descriptive statistics of prep data
+
+table(my_data$poleff3)
+table(my_data$poleff13)
+table(my_data$poleff11)
+table(my_data$polviews)
+table(my_data$incom16) #majority believes their family had average or below average wealth
+table(my_data$race) #majority of study is white
+
+#Getting counts for data description
+dplyr::count(my_data, poleff3, sort = FALSE)
+dplyr::count(my_data, poleff13, sort = FALSE)
+dplyr::count(my_data, polviews, sort = FALSE)
+dplyr::count(my_data, race, sort = FALSE)
+dplyr::count(my_data, poleff11, sort = FALSE)
+
+
+
+#cross tabulating: perception of political impact of avg citizen" and "political views"
+#within each level of perception of political impact, what's the proportions of political ideology?
+CrossTable(my_data$polviews, my_data$poleff3, prop.r=F, prop.c=T, prop.t=F, prop.chisq=F, format="SPSS")
+
+#cross tabulating: perception of political impact and perception of political knowledge
+#you can see that people who are believe they have greater understanding of politics
+#also believe the average citizen has a great impact on politics
+CrossTable(my_data$poleff13, my_data$poleff3, prop.r=F, prop.c=T, prop.t=F, prop.chisq=F, format="SPSS")
+
+#cross tabulating: 
+#within each race, what are the proportions of political views?
+CrossTable(my_data$polviews, my_data$race, prop.r=F, prop.c=T, prop.t=F, prop.chisq=F, format="SPSS")
+
+###INITIAL MODELS###
+#naive OLS models
+
+lm1 <- lm(poleff3 ~ polviews, data=my_data)
+summary(lm1)
+
+lm2 <- lm(poleff3 ~ polviews + poleff13, data=my_data)
+summary(lm2)
+
+lm3 <- lm(poleff3 ~ polviews + poleff13 + poleff11, data=my_data)
+summary(lm3)
+
+#agesq looks worse lol
+lm4 <- lm(poleff3 ~ polviews + agesq, data=my_data)
+summary(lm4)
+
+#using race_other looks like it is too correlated with something... 
+#This could be due to the fact that if race_white = 0, and race_black = 0
+#It is assumed that they are race_other = 1. Let's remove race_other!
+lm5 <- lm(poleff3 ~ polviews + poleff13 + poleff11 + age + race_white + race_black + race_other, data=my_data)
+summary(lm5)
+
+lm6 <- lm(poleff3 ~ polviews + poleff13 + poleff11 + age + race_white + race_black, data=my_data)
+summary(lm6)
+
+
+#logit model
+logit1 = glm(poleff3 ~ polviews, data=my_data)
+summary(logit1)
+
+logit2 = glm(poleff3 ~ polviews + poleff13 + age + race_white + race_black, data=my_data)
+summary(logit2)
+
+
+
+new_data <- my_data
+new_data <- na.omit(new_data)
+
+#creating 3 category dependent variable for ordinal logit
+#1-2 = disagree(1), 3 = neutral(2), 4-5 = agree(3)
+
+#poleff3n is poleff3 with only 3 categories
+new_data <- new_data %>%
+  mutate(poleff3n = case_when(
+    poleff3 < 3 ~ 1,
+    poleff3 > 3 ~ 3,
+    poleff3 == 3 ~ 2
+  ))
+
+summary(new_data$poleff3n)
+
+#family proportion odds, base model
+vlgm.pol1 <- vglm(poleff3n ~ polviews + poleff13, data = new_data, family = propodds)
+summary(vlgm.pol1 )
+
+coef.pol1 <- coef(summary(vlgm.pol1))
+coef.pol1 <- data.frame(coef.pol1)
+coef.pol1[, "p.value"] <- 2*(1 - pnorm(abs(coef.pol1[, "z.value"])))
+
+coef.pol1$odds.ratio <- exp(coef.pol1[, "Estimate"])
+
+coef.pol1
+
+#including poleff11
+vlgm.pol2 <- vglm(poleff3n ~ polviews + poleff13 + poleff11, data = new_data, family = propodds)
+summary(vlgm.pol2 )
+
+coef.pol2 <- coef(summary(vlgm.pol2))
+coef.pol2 <- data.frame(coef.pol2)
+coef.pol2[, "p.value"] <- 2*(1 - pnorm(abs(coef.pol2[, "z.value"])))
+
+coef.pol2$odds.ratio <- exp(coef.pol2[, "Estimate"])
+
+coef.pol2
+
+#including control variables
+vlgm.pol3 <- vglm(poleff3n ~ polviews + poleff13 + poleff11 
+                  + age + race_white + race_black, data = new_data, family = propodds)
+summary(vlgm.pol3 )
+
+coef.pol3 <- coef(summary(vlgm.pol3))
+coef.pol3 <- data.frame(coef.pol3)
+coef.pol3[, "p.value"] <- 2*(1 - pnorm(abs(coef.pol3[, "z.value"])))
+
+coef.pol3$odds.ratio <- exp(coef.pol3[, "Estimate"])
+
+coef.pol3
+
